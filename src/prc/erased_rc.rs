@@ -126,6 +126,7 @@ pub(crate) struct RcErased<T: ?Sized>(PhantomData<*const T>);
 impl<T: ?Sized> RcErased<T> {
     // A "vtable" for Rc<T> and rc::Weak<T> where T: ?Sized
     const VTABLE: RcVTable = RcVTable {
+        as_ptr: Self::as_ptr,
         clone: Self::clone,
         drop: Self::drop,
         downgrade: Self::downgrade,
@@ -137,6 +138,12 @@ impl<T: ?Sized> RcErased<T> {
         strong_count_weak: Self::strong_count_weak,
         weak_count_weak: Self::weak_count_weak,
     };
+
+    // Must be called with an erased pointer to Rc<T>
+    unsafe fn as_ptr(ptr: TypeErasedPtr) -> TypeErasedPtr {
+        let rc = Self::as_manually_drop_rc(ptr);
+        TypeErasedPtr::new(Rc::as_ptr(&rc))
+    }
 
     // Must be called with an erased pointer to Rc<T>
     unsafe fn clone(ptr: TypeErasedPtr) {

@@ -24,6 +24,16 @@ impl TypeErasedArc {
     }
 
     #[inline]
+    pub(crate) fn as_ptr(&self) -> TypeErasedPtr {
+        unsafe { (self.vtable.as_ptr)(self.ptr) }
+    }
+
+    #[inline]
+    pub(crate) fn arc_ptr(&self) -> TypeErasedPtr {
+        self.ptr
+    }
+
+    #[inline]
     pub(crate) fn downgrade(&self) -> TypeErasedWeak {
         TypeErasedWeak {
             // SAFETY: downgrade is guaranteed to return an erased pointer to Weak<T>
@@ -122,6 +132,7 @@ pub(crate) struct ArcErased<T: ?Sized>(PhantomData<*const T>);
 impl<T: ?Sized> ArcErased<T> {
     // A "vtable" for Arc<T> and sync::Weak<T> where T: ?Sized
     const VTABLE: RcVTable = RcVTable {
+        as_ptr: Self::as_ptr,
         clone: Self::clone,
         drop: Self::drop,
         downgrade: Self::downgrade,
@@ -133,6 +144,12 @@ impl<T: ?Sized> ArcErased<T> {
         strong_count_weak: Self::strong_count_weak,
         weak_count_weak: Self::weak_count_weak,
     };
+
+    // Must be called with an erased pointer to Arc<T>
+    unsafe fn as_ptr(ptr: TypeErasedPtr) -> TypeErasedPtr {
+        let arc = Self::as_manually_drop_arc(ptr);
+        TypeErasedPtr::new(Arc::as_ptr(&arc))
+    }
 
     // Must be called with an erased pointer to Arc<T>
     unsafe fn clone(ptr: TypeErasedPtr) {

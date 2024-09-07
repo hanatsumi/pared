@@ -96,16 +96,7 @@ mod erased_arc;
 
 use alloc::sync::Arc;
 use core::{
-    clone::Clone,
-    cmp::{Eq, Ord, PartialEq, PartialOrd},
-    convert::{AsRef, From, Into},
-    hash::Hash,
-    iter::{FromIterator, IntoIterator},
-    marker::{Send, Sized, Sync, Unpin},
-    ops::Deref,
-    ops::FnOnce,
-    option::{Option, Option::Some},
-    ptr::NonNull,
+    clone::Clone, cmp::{Eq, Ord, PartialEq, PartialOrd}, convert::{AsRef, From, Into}, fmt::Debug, hash::Hash, iter::{FromIterator, IntoIterator}, marker::{Send, Sized, Sync, Unpin}, mem::ManuallyDrop, ops::{Deref, FnOnce}, option::Option::{self, Some}, ptr::NonNull
 };
 
 use erased_arc::{TypeErasedArc, TypeErasedWeak};
@@ -162,7 +153,7 @@ use erased_arc::{TypeErasedArc, TypeErasedWeak};
 /// [`Arc`]: https://doc.rust-lang.org/std/sync/struct.Arc.html
 pub struct Parc<T: ?Sized> {
     arc: TypeErasedArc,
-    projected: NonNull<T>,
+    projected: Option<NonNull<T>>,
 }
 
 impl<T> Parc<T>
@@ -178,11 +169,21 @@ where
     /// ```
     #[inline]
     pub fn new(value: T) -> Parc<T> {
-        Arc::new(value).into()
+        Self::new_from_arc(&value.into())
     }
 }
 
 impl<T: ?Sized> Parc<T> {
+    /// From raw arc
+    #[inline]
+    pub fn new_from_arc(arc: &Arc<T>) -> Parc<T>
+    where T: Send + Sync {
+        Self {
+            arc: TypeErasedArc::new(arc.clone()),
+            projected: None,
+        }
+    }
+
     /// Constructs a new `Parc<T>` from an existing `Arc<T>` by projecting a field.
     ///
     /// # Panics
@@ -219,7 +220,7 @@ impl<T: ?Sized> Parc<T> {
         let projected = unsafe { NonNull::new_unchecked(projected as *const T as *mut T) };
         Self {
             arc: TypeErasedArc::new(arc.clone()),
-            projected,
+            projected: Some(projected),
         }
     }
 
@@ -262,7 +263,7 @@ impl<T: ?Sized> Parc<T> {
         let projected = unsafe { NonNull::new_unchecked(projected as *const T as *mut T) };
         Ok(Self {
             arc: TypeErasedArc::new(arc.clone()),
-            projected,
+            projected: Some(projected),
         })
     }
 
@@ -300,7 +301,7 @@ impl<T: ?Sized> Parc<T> {
         let projected = unsafe { NonNull::new_unchecked(projected as *const U as *mut U) };
         Parc::<U> {
             arc: self.arc.clone(),
-            projected,
+            projected: Some(projected),
         }
     }
 
@@ -341,7 +342,7 @@ impl<T: ?Sized> Parc<T> {
         let projected = unsafe { NonNull::new_unchecked(projected as *const U as *mut U) };
         Ok(Parc::<U> {
             arc: self.arc.clone(),
-            projected,
+            projected: Some(projected),
         })
     }
     /// Provides a raw pointer to the data.
@@ -362,7 +363,9 @@ impl<T: ?Sized> Parc<T> {
     /// ```
     #[must_use]
     pub fn as_ptr(this: &Self) -> *const T {
-        NonNull::as_ptr(this.projected)
+        let ptr = this.projected.unwrap_or_else(|| unsafe { NonNull::new_unchecked(this.arc.as_ptr().as_ptr() as *const T as *mut T) }); 
+
+        NonNull::as_ptr(ptr)
     }
 
     /// Creates a new `Weak` pointer to this allocation.
@@ -386,7 +389,7 @@ impl<T: ?Sized> Parc<T> {
     pub fn downgrade(this: &Parc<T>) -> Weak<T> {
         Weak::<T> {
             weak: this.arc.downgrade(),
-            projected: this.projected,
+            projected: todo!(),
         }
     }
 
@@ -457,7 +460,24 @@ impl<T: ?Sized> Parc<T> {
     ///
     /// [`core::ptr::eq`]: https://doc.rust-lang.org/core/ptr/fn.eq.html
     pub fn ptr_eq(this: &Parc<T>, other: &Parc<T>) -> bool {
-        core::ptr::eq(this.projected.as_ptr(), other.projected.as_ptr())
+        core::ptr::eq(Parc::as_ptr(this), Parc::as_ptr(other))
+    }
+}
+
+impl<T: ?Sized + Clone + Debug> Parc<T> {
+    /// ok bro
+    pub fn unwrap_or_clone(this: Parc<T>) -> T {
+        // If we are projecting, we'll have to clone no matter what, as we don't really know whether we
+        // own the data.
+        if let Some(projected) = this.projected {
+            unsafe { projected.as_ref().clone() }
+        } else {
+            let type_erased_arc = ManuallyDrop::new(this.arc);
+
+            // If we have an identity projection, we can safely assume the type of the underlying Arc is Arc<T>.
+            let arc: Arc<T> = unsafe { Arc::from_raw(type_erased_arc.arc_ptr().as_ptr()) };
+            Arc::unwrap_or_clone(arc)
+        }
     }
 }
 
@@ -509,7 +529,8 @@ impl<T: ?Sized> Deref for Parc<T> {
     fn deref(&self) -> &Self::Target {
         // SAFETY: projected is safely constructed only in `from_arc` or `project`,
         // where we guarantee the pointer will be valid as long as the original `Arc` lives.
-        unsafe { self.projected.as_ref() }
+        // If we aren't projecting, we get the pointer directly from the `Arc`.
+        unsafe { Parc::as_ptr(self).as_ref().unwrap() }
     }
 }
 
@@ -531,7 +552,7 @@ where
 {
     #[inline]
     fn from(value: F) -> Self {
-        Parc::from_arc(&value.into(), |x| x)
+        Parc::new_from_arc(&value.into())
     }
 }
 
@@ -596,7 +617,7 @@ where
     T: ?Sized,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        core::fmt::Pointer::fmt(&self.projected, f)
+        core::fmt::Pointer::fmt(&Parc::as_ptr(self), f)
     }
 }
 
@@ -726,7 +747,7 @@ impl<T: ?Sized> Weak<T> {
     pub fn upgrade(&self) -> Option<Parc<T>> {
         Some(Parc {
             arc: self.weak.upgrade()?,
-            projected: self.projected,
+            projected: todo!(),
         })
     }
 

@@ -205,6 +205,34 @@ fn ptr_eq() {
 
 #[test]
 #[cfg_attr(coverage_nightly, coverage(off))]
+fn unwrap_or_clone() {
+    #[derive(Clone, Debug)]
+    struct Test {
+        s: String,
+    }
+
+    let parc = Parc::new(Test { s: "Hello World".into() });
+    let original_s1_address = parc.s.as_ptr();
+
+    let parc_projected = parc.project(|data| &data.s);
+
+    assert_eq!(2, Parc::strong_count(&parc));
+    assert_eq!(2, Parc::strong_count(&parc_projected));
+
+    let projection_clone = Parc::unwrap_or_clone(parc_projected);
+
+    assert_eq!(parc.s, projection_clone);
+    assert_eq!(1, Parc::strong_count(&parc));
+    assert_ne!(projection_clone.as_ptr(), parc.s.as_ptr());
+
+    let unwrapped = Parc::unwrap_or_clone(parc);
+
+    assert_eq!("Hello".to_string(), unwrapped.s);
+    assert_eq!(original_s1_address, unwrapped.s.as_ptr());
+}
+
+#[test]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn borrows() {
     let parc = Parc::new(5);
 

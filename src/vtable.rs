@@ -8,6 +8,7 @@ use crate::erased_ptr::TypeErasedPtr;
 /// reference-counted pointers, while not having to care which type is stored in them.
 #[derive(Debug)]
 pub(crate) struct RcVTable {
+    pub as_ptr: unsafe fn(TypeErasedPtr) -> TypeErasedPtr,
     pub clone: unsafe fn(TypeErasedPtr),
     pub drop: unsafe fn(TypeErasedPtr),
     pub downgrade: unsafe fn(TypeErasedPtr) -> TypeErasedPtr,
@@ -44,6 +45,7 @@ mod tests {
         }
 
         let vtable = RcVTable {
+            as_ptr: b,
             clone: a,
             drop: a,
             downgrade: b,
